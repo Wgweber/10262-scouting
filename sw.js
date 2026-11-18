@@ -1,6 +1,6 @@
 /* 10262 Scouting — service worker: makes the app open with no internet,
  * and (on Android/Chrome) uploads waiting reports even after the app is closed. */
-const VERSION = "es-shell-v5";
+const VERSION = "es-shell-v6";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/app.css",
   "js/config.js", "js/fields.js", "js/combine.js", "js/core.js", "js/tba.js", "js/model.js", "js/io.js", "js/qr.js", "js/ui.js",

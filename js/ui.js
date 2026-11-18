@@ -44,6 +44,7 @@
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") kickSync(); });
   }
   async function updateBadge() {
+    drawUpload().catch(() => {});
     const b = $("#syncBadge");
     const n = await Core.outboxCount();
     const s = S.settings;
@@ -87,7 +88,7 @@
   }
   function go(hash) { location.hash = hash; }
   window.addEventListener("hashchange", () => {
-    if (S.formDirty && !confirm("You have an unsaved form. Leave it?")) { history.back(); return; }
+    if (S.formDirty === true && !confirm("You have an unsaved form. Leave it?")) { history.back(); return; }
     S.formDirty = false;
     render();
     window.scrollTo(0, 0);
@@ -108,7 +109,7 @@
     const { route, params } = parseHash();
     S.route = route; S.params = params;
     renderNav();
-    const narrow = ["home", "pit", "match", "rate", "settings", "sync"].includes(route);
+    const narrow = ["home", "pit", "match", "settings", "sync"].includes(route);
     view.className = "view" + (narrow ? " narrow" : "");
     ROUTES[route].render(params);
     updateBadge();
@@ -195,13 +196,75 @@
     if (st.ok) toast(`${what} saved and uploaded ✓`);
     else if (Core.cloudReady(S.settings)) toast(`${what} saved ✓ — will upload when there's internet`, 4500);
   }
+  // ---- upload progress bar (form pages) ----
+  async function trackUpload(ids, what) {
+    S.tracking = { route: S.route, ids, what, phase: "saving" };
+    await drawUpload();
+    toast(`${what} saved on this device ✓`);
+    S.tracking.phase = "uploading"; await drawUpload();
+    await kickSync({ pullToo: false });
+    if (S.tracking) S.tracking.phase = "tried";
+    await drawUpload();
+  }
+  async function drawUpload() {
+    const waiting = new Set((await Core.pendingRecords()).map((r) => r.id));
+    $$("[data-up]").forEach((x) => {
+      const w = waiting.has(x.dataset.up);
+      x.textContent = w ? "waiting to upload" : "uploaded ✓";
+      x.className = "uptag " + (w ? "wait" : "ok");
+    });
+    const el = $("#upStatus");
+    if (!el) return;
+    const t = S.tracking;
+    if (!t || t.route !== S.route) { el.innerHTML = ""; return; }
+    const left = t.ids.filter((id) => waiting.has(id)).length;
+    let pct, msg, cls = "";
+    if (t.phase === "saving") { pct = 25; msg = "Saving on this device…"; }
+    else if (!left) { pct = 100; msg = "Uploaded ✓"; cls = "ok"; }
+    else if (t.phase === "uploading") { pct = 70; msg = "Uploading…"; }
+    else if (!Core.cloudReady(S.settings)) { pct = 50; msg = "Saved on this device. Cloud sync isn't set up here, so send it by QR code (Sync & Files)."; cls = "wait"; }
+    else if (!navigator.onLine) { pct = 50; msg = "Saved on this device. No internet: it uploads by itself when you're back online."; cls = "wait"; }
+    else { pct = 50; msg = "Saved on this device. Can't reach the cloud yet; still trying."; cls = "wait"; }
+    const partial = t.ids.length > 1 && left && left < t.ids.length ? ` (${t.ids.length - left} of ${t.ids.length})` : "";
+    el.innerHTML = `<div class="upcard ${cls}" role="status"><div class="uprow"><span><b>${esc(t.what)}</b> · ${esc(msg)}${partial}</span><b>${pct}%</b></div><div class="progress"><div style="width:${pct}%"></div></div></div>`;
+  }
+
+  // ---- delete password ----
+  const DELETE_HASH = "40372f02d049d2db1d273ab0c17a80a253edb6f380fd9f0e533b449e802d84f3"; // only the fingerprint is stored, not the password
+  async function sha256(t) {
+    const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+    return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  function askDeletePassword(message) {
+    return new Promise((resolve) => {
+      const d = document.createElement("dialog");
+      d.className = "pwdlg";
+      d.innerHTML = `<form method="dialog"><h2 style="margin-top:0">Delete password needed</h2><p>${esc(message)}</p>
+        <label class="f" for="pwIn">Password</label><input id="pwIn" type="password" autocomplete="off">
+        <div class="small status-bad" id="pwErr" style="min-height:1.2em;margin-top:.3rem"></div>
+        <div class="actions"><button type="button" id="pwCancel">Cancel</button><button type="submit" class="primary" id="pwOk">Delete</button></div></form>`;
+      document.body.appendChild(d);
+      const done = (ok) => { d.close(); d.remove(); resolve(ok); };
+      d.querySelector("#pwCancel").onclick = () => done(false);
+      d.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });
+      d.querySelector("form").onsubmit = async (e) => {
+        e.preventDefault();
+        const ok = (await sha256(d.querySelector("#pwIn").value)) === DELETE_HASH;
+        if (ok) done(true);
+        else { d.querySelector("#pwErr").textContent = "Wrong password. Nothing was deleted."; d.querySelector("#pwIn").select(); }
+      };
+      d.showModal();
+      setTimeout(() => d.querySelector("#pwIn").focus(), 50);
+    });
+  }
+
   function myRecent(kind, limit = 8) {
     const dev = S.records.filter((r) => r.kind === kind && !r.deleted && r.scout === S.settings.scoutName)
       .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
     if (!dev.length) return "";
     return `<h2>Your recent ${kind === "pit" ? "pit reports" : kind === "match" ? "match reports" : "ratings"}</h2>` +
       dev.map((r) => `<div class="list-item"><div><b>${r.team}</b> ${esc(teamName(r.team))}${kind === "match" || (kind === "rating" && r.data.mk) ? ` · ${esc(Tba.label(Model.mkOf(r)))}` : ""}
-        <div class="small muted">${new Date(r.updatedAt).toLocaleString()}</div></div>
+        <div class="small muted">${new Date(r.updatedAt).toLocaleString()} · <span data-up="${esc(r.id)}" class="uptag"></span></div></div>
         <a class="btn" href="#/${kind === "rating" ? "rate" : kind}?edit=${encodeURIComponent(r.id)}">Edit</a></div>`).join("");
   }
 
@@ -244,6 +307,7 @@
     view.innerHTML = `
       <h1>${editing ? "Edit pit report" : "Pit scouting"}</h1>
       ${needName()}
+      <div id="upStatus"></div>
       <form id="pitForm" autocomplete="off">
         <label class="f" for="team">Team number</label>
         <input id="team" name="team" type="number" inputmode="numeric" list="teamlist" required value="${esc(team)}">
@@ -267,12 +331,12 @@
       rec.team = t; rec.data = readFields(form, g.pit);
       await save(rec);
       S.formDirty = false;
-      afterSubmit(`Pit report for ${t}`);
       if (editing) go("#/pit"); else { render(); window.scrollTo(0, 0); }
+      trackUpload([rec.id], `Pit report · ${t}`);
     };
     const del = $("#del");
     if (del) del.onclick = async () => {
-      if (!confirm("Delete this pit report for everyone?")) return;
+      if (!(await askDeletePassword("Delete this pit report for everyone?"))) return;
       await save(Object.assign({}, editing, { deleted: true }));
       S.formDirty = false; toast("Deleted"); go("#/pit");
     };
@@ -297,6 +361,7 @@
     view.innerHTML = `
       <h1>${editing ? "Edit match report" : "Match scouting"}</h1>
       ${needName()}
+      <div id="upStatus"></div>
       <form id="mForm" autocomplete="off">
         ${sched.length ? `<label class="f" for="mk">Match</label><select id="mk" name="mk"><option value="">Choose a match…</option>${opts}<option value="_other" ${mk && !sched.some((m) => m.data.mk === mk) ? "selected" : ""}>Not in the list…</option></select>` : ""}
         <div id="otherMatch" ${sched.length && !(mk && !sched.some((m) => m.data.mk === mk)) ? "hidden" : ""}>
@@ -352,8 +417,8 @@
       if (st) localStorage.setItem("es-station", st.value);
       await save(rec);
       S.formDirty = false;
-      afterSubmit(`${Tba.label(k)} · ${t}`);
       if (editing) { go("#/match"); return; }
+      trackUpload([rec.id], `${Tba.label(k)} · ${t}`);
       // Jump to the next match at the same station.
       const i = S.model.schedule.findIndex((m) => m.data.mk === k);
       const next = i >= 0 ? S.model.schedule[i + 1] : null;
@@ -361,7 +426,7 @@
     };
     const del = $("#del");
     if (del) del.onclick = async () => {
-      if (!confirm("Delete this match report for everyone?")) return;
+      if (!(await askDeletePassword("Delete this match report for everyone?"))) return;
       await save(Object.assign({}, editing, { deleted: true }));
       S.formDirty = false; toast("Deleted"); go("#/match");
     };
@@ -405,8 +470,7 @@
     const slots = editRec
       ? [{ station: editRec.data.station || "Team", team: editRec.team, data: Object.assign({}, editRec.data), id: editRec.id }]
       : STATIONS.map((st) => ({ station: st, team: "", data: {}, id: null }));
-    let active = 0;
-    // "signature" of a robot's answers, to tell saved from changed-since-saving
+    const N = slots.length;
     const sig = (sl) => JSON.stringify([mk || "", Number(sl.team) || "", g.rating.map((f) => sl.data[f.key] ?? "")]);
     const isSaved = (sl) => !!sl.id && sl.saved === sig(sl);
     const isPending = (sl) => !!sl.team && hasData(sl.data) && !isSaved(sl);
@@ -425,101 +489,100 @@
     };
     fillFromMatch();
 
+    const color = (sl) => (sl.station.startsWith("Red") ? "red" : sl.station.startsWith("Blue") ? "blue" : "");
+    const ctrl = (f, i) => {
+      const lab = `${esc(f.label)} — ${esc(slots[i].station)}`;
+      if (f.type === "longtext" || f.type === "text") return `<textarea data-i="${i}" data-k="${f.key}" aria-label="${lab}" placeholder="…"></textarea>`;
+      const opts = f.type === "rating" ? ["1", "2", "3", "4", "5"] : f.options;
+      return `<select data-i="${i}" data-k="${f.key}" aria-label="${lab}"><option value="">–</option>${opts.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}</select>`;
+    };
     view.innerHTML = `
       <h1>${editRec ? "Edit rating" : "Rate teams in a match"}</h1>
-      <p class="muted small">${editRec ? "" : "Pick the match, tap a robot, rate it and press its Submit button. Or rate several and submit them together at the bottom. "}Everything is optional: rate only what you saw. Robots you leave blank aren't saved. Everyone's ratings from every match are averaged on the Teams pages.</p>
+      <p class="muted small">${editRec ? "" : "Pick the match. All six robots are side by side: tap any box to rate. Submit a robot with the button under its column, or all rated robots at the bottom. "}Everything is optional: rate only what you saw. Blank robots aren't saved.</p>
       ${needName()}
+      <div id="upStatus"></div>
       <form id="rForm" autocomplete="off">
-        ${matchPickerHTML(mk, true)}
-        <div id="slotTabs" class="slots" ${editRec ? "hidden" : ""}></div>
-        <div id="rPanel"></div>
-        <div class="actions" id="slotNav" ${editRec ? "hidden" : ""}><button type="button" id="prevSlot">◀ Previous robot</button><button type="button" id="nextSlot">Next robot ▶</button></div>
+        ${editRec ? "" : matchPickerHTML(mk, true)}
         ${teamOptions()}
-        <button class="primary big" type="submit" id="rSubmit">Save ratings</button>
+        <div class="rgrid" id="rgrid" style="--cols:${N}">
+          <div class="corner"></div>
+          ${slots.map((sl, i) => `<div class="rh ${color(sl)}"><div class="st">${esc(sl.station)}</div>
+            <input class="rteam" data-i="${i}" type="number" inputmode="numeric" list="teamlist" placeholder="Team #" aria-label="${esc(sl.station)} team number">
+            <div class="tn" data-tn="${i}"></div></div>`).join("")}
+          ${g.rating.map((f) => `<div class="rl">${esc(f.label)}${f.help ? ` <span class="help">${esc(f.help)}</span>` : ""}</div>` +
+            slots.map((sl, i) => `<div class="rc ${i >= N / 2 ? "right" : ""}">${ctrl(f, i)}</div>`).join("")).join("")}
+          <div class="corner"></div>
+          ${slots.map((sl, i) => `<div class="rf">${editRec ? "" : `<button type="button" class="dark" data-sub="${i}">Submit</button>`}<div class="ss" data-ss="${i}"></div></div>`).join("")}
+        </div>
+        <button class="primary big" type="submit" id="rSubmit">Submit ratings</button>
         ${editRec ? `<div class="actions"><a class="btn" href="#/rate">Cancel</a><button type="button" id="del">Delete this rating</button></div>` : ""}
       </form>
       ${editRec ? "" : myRecent("rating")}`;
     wireName();
-    const form = $("#rForm");
-    wireForm(form);
+    const form = $("#rForm"), grid = $("#rgrid");
+    // On phones a notes box grows to the full width of the grid while you type in it.
+    grid.addEventListener("focusin", (e) => {
+      const ta = e.target.closest("textarea");
+      if (!ta || matchMedia("(min-width: 760px)").matches) return;
+      const gr = grid.getBoundingClientRect(), cr = ta.parentElement.getBoundingClientRect();
+      ta.style.left = `${gr.left - cr.left}px`; ta.style.width = `${gr.width}px`;
+    });
+    grid.addEventListener("focusout", (e) => { const ta = e.target.closest("textarea"); if (ta) { ta.style.left = ""; ta.style.width = ""; } });
+    const ctl = (i, k) => grid.querySelector(`[data-i="${i}"][data-k="${k}"]`);
+    const teamIn = (i) => grid.querySelector(`.rteam[data-i="${i}"]`);
 
-    const readActive = () => {
-      if (!$("#slotTeam")) return;
-      const sl = slots[active];
-      sl.team = Number($("#slotTeam").value) || "";
-      sl.data = Object.assign({}, sl.data, readFields(form, g.rating));
-    };
-    const drawTabs = () => {
-      const pending = slots.filter(isPending).length;
-      const anySaved = slots.some(isSaved);
-      S.formDirty = pending > 0;
-      $("#rSubmit").textContent = editRec ? "Save changes"
-        : pending ? `Submit all rated robots (${pending})`
-        : anySaved ? "Done with this match ▶" : "Submit ratings";
-      if (editRec) return;
-      const box = $("#slotTabs");
-      if (box.children.length !== slots.length) { // build once; afterwards only update in place so taps never miss
-        box.innerHTML = slots.map((sl, i) => `<button type="button" data-slot="${i}"><span class="st"></span><span class="tn"></span><span class="ss"></span></button>`).join("");
-        $$("[data-slot]").forEach((b) => (b.onclick = () => { readActive(); active = Number(b.dataset.slot); drawPanel(); }));
+    const fillValues = () => slots.forEach((sl, i) => {
+      teamIn(i).value = sl.team || "";
+      for (const f of g.rating) ctl(i, f.key).value = sl.data[f.key] ?? "";
+    });
+    const readAll = () => slots.forEach((sl, i) => {
+      sl.team = Number(teamIn(i).value) || "";
+      for (const f of g.rating) {
+        const v = ctl(i, f.key).value;
+        sl.data[f.key] = f.type === "rating" ? (v ? Number(v) : "") : f.type === "longtext" || f.type === "text" ? v.trim() : v;
       }
+    });
+    const update = () => {
       slots.forEach((sl, i) => {
-        const b = box.children[i];
-        b.className = `slot ${sl.station.startsWith("Red") ? "red" : "blue"} ${i === active ? "on" : ""} ${isSaved(sl) ? "done" : ""}`;
-        b.querySelector(".st").textContent = sl.station;
-        b.querySelector(".tn").textContent = sl.team || "—";
-        b.querySelector(".ss").textContent = isSaved(sl) ? "sent ✓" : isPending(sl) ? "not sent" : "";
+        grid.querySelector(`[data-tn="${i}"]`).textContent = sl.team ? (teamName(sl.team) || "new team") : "";
+        for (const f of g.rating) ctl(i, f.key).classList.toggle("set", !Comb.isBlank(sl.data[f.key]));
+        const ss = grid.querySelector(`[data-ss="${i}"]`);
+        ss.innerHTML = isSaved(sl) ? `sent ✓<br><span class="uptag" data-up="${esc(sl.id)}"></span>` : isPending(sl) ? `<span class="status-wait">not sent</span>` : "";
+        const sb = grid.querySelector(`[data-sub="${i}"]`);
+        if (sb) { sb.disabled = !isPending(sl); sb.textContent = isSaved(sl) ? "Sent" : "Submit"; }
       });
-      const sb = $("#slotSave");
-      if (sb) { const sl = slots[active]; sb.disabled = !isPending(sl); sb.textContent = isSaved(sl) ? `${sl.station} submitted ✓` : `Submit ${sl.station}${sl.team ? " · " + sl.team : ""} only`; }
+      const pending = slots.filter(isPending).length;
+      // true = unsaved ratings (warn before leaving); "soft" = scout is mid-way (don't refresh the page under them)
+      S.formDirty = pending > 0 ? true : touched && slots.some((sl) => !isSaved(sl) && (sl.team || hasData(sl.data))) ? "soft" : false;
+      $("#rSubmit").textContent = editRec ? "Save changes" : pending ? `Submit all rated robots (${pending})` : slots.some(isSaved) ? "Done with this match ▶" : "Submit ratings";
+      drawUpload().catch(() => {});
     };
-    const drawPanel = () => {
-      const sl = slots[active];
-      $("#rPanel").innerHTML = `
-        <div class="card slotcard ${sl.station.startsWith("Red") ? "red" : sl.station.startsWith("Blue") ? "blue" : ""}">
-          <label class="f" for="slotTeam" style="margin-top:0">${esc(sl.station)} — team number</label>
-          <input id="slotTeam" type="number" inputmode="numeric" list="teamlist" value="${esc(sl.team)}">
-          <div class="teamname" id="slotTeamName"></div>
-          ${g.rating.map((f) => fieldHTML(f, sl.data[f.key])).join("")}
-          ${editRec ? "" : `<button type="button" class="dark big" id="slotSave">Submit this robot</button>`}
-        </div>`;
-      $$("#rPanel input[type=radio]:checked").forEach((i) => (i.dataset.was = "1"));
-      wireTeamInput($("#slotTeam"), $("#slotTeamName"));
-      const sb = $("#slotSave");
-      if (sb) sb.onclick = () => submitSlots([slots[active]], true);
-      drawTabs();
-    };
-    // Typing or tapping anywhere in the robot's card updates its tab right away.
-    const live = () => { readActive(); drawTabs(); };
-    $("#rPanel").addEventListener("change", live);
-    $("#rPanel").addEventListener("input", live);
-    $("#rPanel").addEventListener("click", () => setTimeout(live)); // after a chip is tapped off
-    drawPanel();
+    let touched = false;
+    fillValues(); update();
+    form.addEventListener("input", () => { touched = true; readAll(); update(); });
+    form.addEventListener("change", () => { touched = true; readAll(); update(); });
+    grid.addEventListener("click", (e) => { const b = e.target.closest("[data-sub]"); if (b) submitSlots([slots[Number(b.dataset.sub)]]); });
 
-    const moveTo = (i) => { readActive(); active = (i + slots.length) % slots.length; drawPanel(); window.scrollTo(0, $("#slotTabs").offsetTop - 120); };
-    $("#prevSlot").onclick = () => moveTo(active - 1);
-    $("#nextSlot").onclick = () => moveTo(active + 1);
     const onMatch = () => {
       const newMk = readMk(form);
       if (form.elements.mk) $("#otherMatch").hidden = form.elements.mk.value !== "_other";
       if (newMk === mk) return;
-      readActive();
+      readAll();
       mk = newMk;
-      const before = JSON.stringify(slots[active]);
       fillFromMatch();
-      // Only redraw the card if the match actually changed what's in it (so a tap into the team box isn't lost).
-      if (JSON.stringify(slots[active]) !== before) drawPanel(); else drawTabs();
+      fillValues(); update(); // values change in place, so a tap into the grid is never lost
     };
     if (form.elements.mk) form.elements.mk.onchange = onMatch;
-    form.elements.qual.onchange = onMatch;
+    if (form.elements.qual) form.elements.qual.onchange = onMatch;
 
-    async function submitSlots(list, single) {
+    async function submitSlots(list) {
       if (!S.settings.scoutName) { toast("Add your name first (top of the page)"); return false; }
-      readActive();
-      mk = readMk(form);
+      readAll();
+      if (!editRec) mk = readMk(form);
       const missingTeam = list.find((sl) => !sl.team && hasData(sl.data));
       if (missingTeam) { toast(`${missingTeam.station} has ratings but no team number`); return false; }
       const todo = list.filter((sl) => sl.team && hasData(sl.data) && (editRec || !isSaved(sl)));
-      if (!todo.length) { toast(single ? "Rate something for this robot first" : "Nothing to save yet: rate at least one robot"); return false; }
+      if (!todo.length) { toast(list.length === 1 ? "Rate something for this robot first" : "Nothing to save yet: rate at least one robot"); return false; }
       for (const sl of todo) {
         const t = Number(sl.team);
         const prev = (sl.id && S.records.find((r) => r.id === sl.id && r.team === t)) || mine(t, mk);
@@ -527,18 +590,15 @@
         rec.team = t;
         rec.match = mk ? matchNumberOf(mk) : undefined;
         const data = {};
-        for (const f of g.rating) data[f.key] = sl.data[f.key] ?? (f.type === "multi" ? [] : "");
+        for (const f of g.rating) data[f.key] = sl.data[f.key] ?? "";
         rec.data = Object.assign(data, { mk: mk || "", station: STATIONS.includes(sl.station) ? sl.station : (prev && prev.data.station) || "" });
         const saved = await Core.saveLocal(rec);
         sl.id = saved.id; sl.saved = sig(sl);
       }
       await reload();
-      afterSubmit(todo.length === 1 ? `${todo[0].station.startsWith("Team") ? "Rating" : todo[0].station} · ${todo[0].team}` : `Ratings for ${todo.map((sl) => sl.team).join(", ")}`);
-      if (single) {
-        // jump to the next robot that still needs rating
-        const nextIdx = [1, 2, 3, 4, 5].map((k) => (active + k) % slots.length).find((i) => !isSaved(slots[i]));
-        if (nextIdx !== undefined) { active = nextIdx; drawPanel(); window.scrollTo(0, $("#slotTabs").offsetTop - 120); } else drawTabs();
-      }
+      update();
+      const what = todo.length === 1 ? `${STATIONS.includes(todo[0].station) ? todo[0].station : "Rating"} · ${todo[0].team}` : `Ratings for ${todo.map((sl) => sl.team).join(", ")}`;
+      trackUpload(todo.map((sl) => sl.id), what);
       return true;
     }
     const nextMatch = () => {
@@ -549,16 +609,15 @@
       go(next ? `#/rate?mk=${next.data.mk}&t=${Date.now()}` : `#/rate?t=${Date.now()}`);
       window.scrollTo(0, 0);
     };
-
     form.onsubmit = async (e) => {
       e.preventDefault();
-      readActive();
+      readAll();
       if (!editRec && !slots.some(isPending) && slots.some(isSaved)) { nextMatch(); return; } // "Done with this match"
-      if (await submitSlots(slots, false)) nextMatch();
+      if (await submitSlots(slots)) nextMatch();
     };
     const del = $("#del");
     if (del) del.onclick = async () => {
-      if (!confirm("Delete this rating for everyone?")) return;
+      if (!(await askDeletePassword("Delete this rating for everyone?"))) return;
       await save(Object.assign({}, editRec, { deleted: true }));
       S.formDirty = false; toast("Deleted"); go("#/rate");
     };
@@ -833,10 +892,55 @@
         </div>
         <p class="small muted">Backups and imports merge with what's here — the newest version of each report wins, nothing is doubled. A backup file on a USB stick also moves data between computers with no internet.</p>
         <div id="fileMsg" class="small"></div>
+      </div>
+      <h2>Clear scouting reports</h2>
+      <div class="card warn">
+        <p class="small">Removes reports for event <b>${esc(s.event)}</b> from every device and the cloud. Needs the delete password. Teams, the schedule and the alliance board are kept.</p>
+        <div class="chips">${[["pit", "Pit reports"], ["match", "Match reports"], ["rating", "Ratings"]].map(([k, l]) => `<label class="chip"><input type="checkbox" class="clrKind" value="${k}" checked><span>${l}</span></label>`).join("")}</div>
+        <div class="grid2">
+          <div><label class="f" for="clrTeam">Only this team <span class="help">(optional)</span></label><input id="clrTeam" type="number" inputmode="numeric" list="teamlist" placeholder="All teams">${teamOptions()}</div>
+          <div><label class="f" for="clrScout">Only this scout <span class="help">(optional)</span></label><select id="clrScout"><option value="">Everyone</option>${[...new Set(S.records.filter((r) => ["pit", "match", "rating"].includes(r.kind) && !r.deleted).map((r) => r.scout).filter(Boolean))].sort().map((n) => `<option>${esc(n)}</option>`).join("")}</select></div>
+        </div>
+        <div style="margin-top:.8rem"><label class="chip"><input type="checkbox" id="clrBackup" checked><span>Download a backup first</span></label></div>
+        <div class="actions"><button class="dark" id="clrBtn">Clear reports…</button><button id="undoBtn" hidden>Undo last clear</button></div>
+        <div id="clrMsg" class="small"></div>
       </div>`;
     $("#syncBtn").onclick = async () => {
       const r = await kickSync();
       toast(r.ok ? `Synced ✓ (${r.pushed} sent, ${r.pulled} received)` : r.error, 4500);
+      renderSync();
+    };
+    // clear reports
+    const clrList = () => {
+      const kinds = $$(".clrKind:checked").map((c) => c.value);
+      const team = Number($("#clrTeam").value) || null;
+      const scout = $("#clrScout").value;
+      return S.records.filter((r) => !r.deleted && kinds.includes(r.kind) && (!team || r.team === team) && (!scout || r.scout === scout));
+    };
+    const clrCount = () => { const n2 = clrList().length; $("#clrBtn").textContent = `Clear ${n2} report${n2 === 1 ? "" : "s"}…`; $("#clrBtn").disabled = !n2; };
+    $$(".clrKind").forEach((c) => (c.onchange = clrCount));
+    $("#clrTeam").oninput = clrCount; $("#clrScout").onchange = clrCount;
+    clrCount();
+    Core.getMeta("lastClear").then((lc) => { if (lc && lc.ids && lc.ids.length) { const u = $("#undoBtn"); if (u) { u.hidden = false; u.textContent = `Undo last clear (${lc.ids.length})`; } } });
+    $("#clrBtn").onclick = async () => {
+      const list = clrList();
+      if (!list.length) return;
+      if (!(await askDeletePassword(`Delete ${list.length} report${list.length === 1 ? "" : "s"} for everyone? You can undo this from this device.`))) return;
+      if ($("#clrBackup").checked) download(new Blob([IO.backupJSON(await Core.allRecords(), s)], { type: "application/json" }), `10262Scouting_before-clear_${stamp()}.json`);
+      for (const r of list) await Core.saveLocal(Object.assign({}, r, { deleted: true }));
+      await Core.setMeta("lastClear", { ids: list.map((r) => r.id), at: Date.now() });
+      await reload(); kickSync();
+      toast(`Cleared ${list.length} reports`);
+      renderSync();
+    };
+    $("#undoBtn").onclick = async () => {
+      const lc = await Core.getMeta("lastClear");
+      if (!lc || !lc.ids) return;
+      let n2 = 0;
+      for (const id of lc.ids) { const r = await Core.getRecord(id); if (r && r.deleted) { await Core.saveLocal(Object.assign({}, r, { deleted: false })); n2++; } }
+      await Core.setMeta("lastClear", null);
+      await reload(); kickSync();
+      toast(`Restored ${n2} reports`);
       renderSync();
     };
     $("#qrPending").onclick = async () => showQR(await Core.pendingRecords());
@@ -1036,7 +1140,7 @@
 
   // ---------------- start ----------------
   window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); S.installPrompt = e; const b = $("#installBtn"); if (b) b.hidden = false; });
-  window.addEventListener("beforeunload", (e) => { if (S.formDirty) { e.preventDefault(); e.returnValue = ""; } });
+  window.addEventListener("beforeunload", (e) => { if (S.formDirty === true) { e.preventDefault(); e.returnValue = ""; } });
 
   async function registerSW() {
     if (!("serviceWorker" in navigator)) return;
