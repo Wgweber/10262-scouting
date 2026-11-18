@@ -19,6 +19,8 @@ h3 { font-size: 1rem; margin: 1rem 0 .4rem; }
   gap: .5rem; padding: calc(.55rem + env(safe-area-inset-top)) .9rem .55rem; background: var(--ink); color: #fff; }
 .brand { font-weight: 800; text-decoration: none; letter-spacing: .02em; }
 .brand .mark { color: var(--accent); }
+.brand { display: inline-flex; align-items: center; gap: .5rem; }
+.brand .logo { width: 1.9rem; height: 1.9rem; border-radius: 6px; }
 .badge { font-size: .8rem; text-decoration: none; padding: .3rem .6rem; border-radius: 999px; border: 1px solid #555; white-space: nowrap; }
 .badge.ok { border-color: #2e7d4f; } .badge.wait { border-color: var(--accent); color: #ffd2c2; } .badge.off { color: #bbb; }
 .nav { position: sticky; top: calc(2.6rem + env(safe-area-inset-top)); z-index: 19; display: flex; gap: .25rem; overflow-x: auto;

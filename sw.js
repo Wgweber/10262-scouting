@@ -1,11 +1,11 @@
 /* 10262 Scouting — service worker: makes the app open with no internet,
  * and (on Android/Chrome) uploads waiting reports even after the app is closed. */
-const VERSION = "es-shell-v2";
+const VERSION = "es-shell-v3";
 const SHELL = [
   "./", "index.html", "manifest.webmanifest", "css/app.css",
   "js/config.js", "js/fields.js", "js/combine.js", "js/core.js", "js/tba.js", "js/model.js", "js/io.js", "js/qr.js", "js/ui.js",
   "vendor/xlsx.full.min.js", "vendor/qrcode.js", "vendor/jsQR.js",
-  "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "icons/apple-touch-icon.png"
+  "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png", "icons/apple-touch-icon.png", "icons/logo-96.png"
 ];
 importScripts("js/config.js", "js/core.js");
 
