@@ -200,7 +200,7 @@
       .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
     if (!dev.length) return "";
     return `<h2>Your recent ${kind === "pit" ? "pit reports" : kind === "match" ? "match reports" : "ratings"}</h2>` +
-      dev.map((r) => `<div class="list-item"><div><b>${r.team}</b> ${esc(teamName(r.team))}${kind === "match" ? ` · ${esc(Tba.label(Model.mkOf(r)))}` : ""}
+      dev.map((r) => `<div class="list-item"><div><b>${r.team}</b> ${esc(teamName(r.team))}${kind === "match" || (kind === "rating" && r.data.mk) ? ` · ${esc(Tba.label(Model.mkOf(r)))}` : ""}
         <div class="small muted">${new Date(r.updatedAt).toLocaleString()}</div></div>
         <a class="btn" href="#/${kind === "rating" ? "rate" : kind}?edit=${encodeURIComponent(r.id)}">Edit</a></div>`).join("");
   }
@@ -217,7 +217,7 @@
       <div class="actions" style="flex-direction:column">
         <a class="btn primary" style="min-height:3.4rem;font-size:1.1rem" href="#/pit">Pit scout a team</a>
         <a class="btn" style="min-height:3.4rem" href="#/match">Scout a match</a>
-        <a class="btn" style="min-height:3.4rem" href="#/rate">Rate a team</a>
+        <a class="btn" style="min-height:3.4rem" href="#/rate">Rate teams in a match</a>
       </div>
       <div class="card soft">
         <div><b>${m.teams.length}</b> teams · <b>${pitDone}</b> pit-scouted · <b>${m.match.length}</b> match reports · <b>${m.schedule.length}</b> matches scheduled</div>
@@ -249,6 +249,7 @@
         <input id="team" name="team" type="number" inputmode="numeric" list="teamlist" required value="${esc(team)}">
         <div class="teamname" id="teamName"></div>
         ${teamOptions()}
+        <p class="small muted">Only the team number is required. Fill in whatever you can.</p>
         ${g.pit.map((f) => fieldHTML(f, editing ? editing.data[f.key] : undefined)).join("")}
         <button class="primary big" type="submit">${editing ? "Save changes" : "Submit pit report"}</button>
         ${editing ? `<div class="actions"><a class="btn" href="#/pit">Cancel</a><button type="button" id="del">Delete this report</button></div>` : ""}
@@ -308,6 +309,7 @@
         <input id="team" name="team" type="number" inputmode="numeric" list="teamlist" required value="${esc(editing ? editing.team : "")}">
         <div class="teamname" id="teamName"></div>
         ${teamOptions()}
+        <p class="small muted">Only the match and team number are required. Skip anything you didn't see.</p>
         ${g.match.map((f) => fieldHTML(f, editing ? editing.data[f.key] : undefined)).join("")}
         <button class="primary big" type="submit">${editing ? "Save changes" : "Submit match report"}</button>
         ${editing ? `<div class="actions"><a class="btn" href="#/match">Cancel</a><button type="button" id="del">Delete this report</button></div>` : ""}
@@ -365,52 +367,200 @@
     };
   }
 
-  // ---------------- RATE ----------------
+  // ---------------- RATE (up to 6 robots per match) ----------------
+  const hasData = (d) => Object.values(d || {}).some((v) => !Comb.isBlank(v));
+  function matchPickerHTML(mk, allowNone) {
+    const sched = S.model.schedule;
+    const inList = sched.some((m) => m.data.mk === mk);
+    const qualNum = /^qm(\d+)$/.exec(mk || "");
+    const opts = sched.map((m) => `<option value="${m.data.mk}" ${m.data.mk === mk ? "selected" : ""}>${esc(m.data.label)} — R ${m.data.red.join(" ")} · B ${m.data.blue.join(" ")}</option>`).join("");
+    return (sched.length ? `<label class="f" for="mk">Match</label><select id="mk" name="mk">
+        <option value="">${allowNone ? "No specific match" : "Choose a match…"}</option>${opts}
+        <option value="_other" ${mk && !inList ? "selected" : ""}>Not in the list…</option></select>` : "") +
+      `<div id="otherMatch" ${sched.length && !(mk && !inList) ? "hidden" : ""}>
+        <label class="f" for="qual">Qualification match number ${allowNone ? `<span class="help">(optional)</span>` : ""}</label>
+        <input id="qual" name="qual" type="number" inputmode="numeric" value="${qualNum ? qualNum[1] : ""}"></div>`;
+  }
+  function readMk(form) {
+    const sel = form.elements.mk;
+    if (sel && sel.value && sel.value !== "_other") return sel.value;
+    if (sel && !sel.value) return "";
+    const q = Number(form.elements.qual.value);
+    return q ? "qm" + q : "";
+  }
+  function matchNumberOf(mk) {
+    const sm = S.model.schedule.find((m) => m.data.mk === mk);
+    if (sm && sm.match) return sm.match;
+    const n = /(\d+)$/.exec(mk || "");
+    return n ? Number(n[1]) : undefined;
+  }
+
   function renderRate(p) {
     const g = S.model.game;
-    let editing = p.edit ? S.records.find((r) => r.id === p.edit) : null;
-    const team = editing ? editing.team : (p.team || "");
+    const me = S.settings.scoutName;
+    const editRec = p.edit ? S.records.find((r) => r.id === p.edit) : null;
+    const mine = (t, mk) => S.records.filter((r) => r.kind === "rating" && !r.deleted && r.team === t && r.scout === me && ((r.data && r.data.mk) || "") === (mk || ""))
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    let mk = editRec ? ((editRec.data && editRec.data.mk) || "") : (p.mk || "");
+    const slots = editRec
+      ? [{ station: editRec.data.station || "Team", team: editRec.team, data: Object.assign({}, editRec.data), id: editRec.id }]
+      : STATIONS.map((st) => ({ station: st, team: "", data: {}, id: null }));
+    let active = 0;
+    // "signature" of a robot's answers, to tell saved from changed-since-saving
+    const sig = (sl) => JSON.stringify([mk || "", Number(sl.team) || "", g.rating.map((f) => sl.data[f.key] ?? "")]);
+    const isSaved = (sl) => !!sl.id && sl.saved === sig(sl);
+    const isPending = (sl) => !!sl.team && hasData(sl.data) && !isSaved(sl);
+    if (editRec) slots[0].saved = sig(slots[0]);
+
+    // Fill team numbers from the schedule and load anything this scout already saved for that match.
+    const fillFromMatch = () => {
+      if (editRec) return;
+      for (const sl of slots) {
+        const t = teamAt(mk, sl.station);
+        if (t) sl.team = t;
+        const prev = sl.team && mine(Number(sl.team), mk);
+        if (prev && !hasData(sl.data)) { sl.data = Object.assign({}, prev.data); sl.id = prev.id; sl.saved = sig(sl); }
+        else if (!prev) { sl.id = null; sl.saved = null; }
+      }
+    };
+    fillFromMatch();
+
     view.innerHTML = `
-      <h1>Rate a team</h1>
-      <p class="muted small">Your own ratings. Everyone's ratings are averaged on the Teams pages. Rating the same team again updates yours.</p>
+      <h1>${editRec ? "Edit rating" : "Rate teams in a match"}</h1>
+      <p class="muted small">${editRec ? "" : "Pick the match, tap a robot, rate it and press its Submit button. Or rate several and submit them together at the bottom. "}Everything is optional: rate only what you saw. Robots you leave blank aren't saved. Everyone's ratings from every match are averaged on the Teams pages.</p>
       ${needName()}
       <form id="rForm" autocomplete="off">
-        <label class="f" for="team">Team number</label>
-        <input id="team" name="team" type="number" inputmode="numeric" list="teamlist" required value="${esc(team)}">
-        <div class="teamname" id="teamName"></div>
+        ${matchPickerHTML(mk, true)}
+        <div id="slotTabs" class="slots" ${editRec ? "hidden" : ""}></div>
+        <div id="rPanel"></div>
+        <div class="actions" id="slotNav" ${editRec ? "hidden" : ""}><button type="button" id="prevSlot">◀ Previous robot</button><button type="button" id="nextSlot">Next robot ▶</button></div>
         ${teamOptions()}
-        <div id="rFields">${g.rating.map((f) => fieldHTML(f, editing ? editing.data[f.key] : undefined)).join("")}</div>
-        <button class="primary big" type="submit">Save rating</button>
+        <button class="primary big" type="submit" id="rSubmit">Save ratings</button>
+        ${editRec ? `<div class="actions"><a class="btn" href="#/rate">Cancel</a><button type="button" id="del">Delete this rating</button></div>` : ""}
       </form>
-      ${myRecent("rating")}`;
+      ${editRec ? "" : myRecent("rating")}`;
     wireName();
     const form = $("#rForm");
     wireForm(form);
-    const teamIn = $("#team");
-    wireTeamInput(teamIn, $("#teamName"));
-    const mine = (t) => S.records.filter((r) => r.kind === "rating" && !r.deleted && r.team === t && r.scout === S.settings.scoutName).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    teamIn.addEventListener("change", () => {
-      const t = Number(teamIn.value);
-      const prev = t && mine(t);
-      if (prev && !editing) {
-        editing = prev;
-        $("#rFields").innerHTML = g.rating.map((f) => fieldHTML(f, prev.data[f.key])).join("");
-        $$("input[type=radio]:checked", form).forEach((i) => (i.dataset.was = "1"));
-        toast("Loaded your earlier rating for " + t);
+
+    const readActive = () => {
+      if (!$("#slotTeam")) return;
+      const sl = slots[active];
+      sl.team = Number($("#slotTeam").value) || "";
+      sl.data = Object.assign({}, sl.data, readFields(form, g.rating));
+    };
+    const drawTabs = () => {
+      const pending = slots.filter(isPending).length;
+      const anySaved = slots.some(isSaved);
+      S.formDirty = pending > 0;
+      $("#rSubmit").textContent = editRec ? "Save changes"
+        : pending ? `Submit all rated robots (${pending})`
+        : anySaved ? "Done with this match ▶" : "Submit ratings";
+      if (editRec) return;
+      const box = $("#slotTabs");
+      if (box.children.length !== slots.length) { // build once; afterwards only update in place so taps never miss
+        box.innerHTML = slots.map((sl, i) => `<button type="button" data-slot="${i}"><span class="st"></span><span class="tn"></span><span class="ss"></span></button>`).join("");
+        $$("[data-slot]").forEach((b) => (b.onclick = () => { readActive(); active = Number(b.dataset.slot); drawPanel(); }));
       }
-    });
+      slots.forEach((sl, i) => {
+        const b = box.children[i];
+        b.className = `slot ${sl.station.startsWith("Red") ? "red" : "blue"} ${i === active ? "on" : ""} ${isSaved(sl) ? "done" : ""}`;
+        b.querySelector(".st").textContent = sl.station;
+        b.querySelector(".tn").textContent = sl.team || "—";
+        b.querySelector(".ss").textContent = isSaved(sl) ? "sent ✓" : isPending(sl) ? "not sent" : "";
+      });
+      const sb = $("#slotSave");
+      if (sb) { const sl = slots[active]; sb.disabled = !isPending(sl); sb.textContent = isSaved(sl) ? `${sl.station} submitted ✓` : `Submit ${sl.station}${sl.team ? " · " + sl.team : ""} only`; }
+    };
+    const drawPanel = () => {
+      const sl = slots[active];
+      $("#rPanel").innerHTML = `
+        <div class="card slotcard ${sl.station.startsWith("Red") ? "red" : sl.station.startsWith("Blue") ? "blue" : ""}">
+          <label class="f" for="slotTeam" style="margin-top:0">${esc(sl.station)} — team number</label>
+          <input id="slotTeam" type="number" inputmode="numeric" list="teamlist" value="${esc(sl.team)}">
+          <div class="teamname" id="slotTeamName"></div>
+          ${g.rating.map((f) => fieldHTML(f, sl.data[f.key])).join("")}
+          ${editRec ? "" : `<button type="button" class="dark big" id="slotSave">Submit this robot</button>`}
+        </div>`;
+      $$("#rPanel input[type=radio]:checked").forEach((i) => (i.dataset.was = "1"));
+      wireTeamInput($("#slotTeam"), $("#slotTeamName"));
+      const sb = $("#slotSave");
+      if (sb) sb.onclick = () => submitSlots([slots[active]], true);
+      drawTabs();
+    };
+    // Typing or tapping anywhere in the robot's card updates its tab right away.
+    const live = () => { readActive(); drawTabs(); };
+    $("#rPanel").addEventListener("change", live);
+    $("#rPanel").addEventListener("input", live);
+    $("#rPanel").addEventListener("click", () => setTimeout(live)); // after a chip is tapped off
+    drawPanel();
+
+    const moveTo = (i) => { readActive(); active = (i + slots.length) % slots.length; drawPanel(); window.scrollTo(0, $("#slotTabs").offsetTop - 120); };
+    $("#prevSlot").onclick = () => moveTo(active - 1);
+    $("#nextSlot").onclick = () => moveTo(active + 1);
+    const onMatch = () => {
+      const newMk = readMk(form);
+      if (form.elements.mk) $("#otherMatch").hidden = form.elements.mk.value !== "_other";
+      if (newMk === mk) return;
+      readActive();
+      mk = newMk;
+      const before = JSON.stringify(slots[active]);
+      fillFromMatch();
+      // Only redraw the card if the match actually changed what's in it (so a tap into the team box isn't lost).
+      if (JSON.stringify(slots[active]) !== before) drawPanel(); else drawTabs();
+    };
+    if (form.elements.mk) form.elements.mk.onchange = onMatch;
+    form.elements.qual.onchange = onMatch;
+
+    async function submitSlots(list, single) {
+      if (!S.settings.scoutName) { toast("Add your name first (top of the page)"); return false; }
+      readActive();
+      mk = readMk(form);
+      const missingTeam = list.find((sl) => !sl.team && hasData(sl.data));
+      if (missingTeam) { toast(`${missingTeam.station} has ratings but no team number`); return false; }
+      const todo = list.filter((sl) => sl.team && hasData(sl.data) && (editRec || !isSaved(sl)));
+      if (!todo.length) { toast(single ? "Rate something for this robot first" : "Nothing to save yet: rate at least one robot"); return false; }
+      for (const sl of todo) {
+        const t = Number(sl.team);
+        const prev = (sl.id && S.records.find((r) => r.id === sl.id && r.team === t)) || mine(t, mk);
+        const rec = prev ? Object.assign({}, prev) : { id: Core.newId("rating"), kind: "rating", event: S.settings.event, scout: S.settings.scoutName };
+        rec.team = t;
+        rec.match = mk ? matchNumberOf(mk) : undefined;
+        const data = {};
+        for (const f of g.rating) data[f.key] = sl.data[f.key] ?? (f.type === "multi" ? [] : "");
+        rec.data = Object.assign(data, { mk: mk || "", station: STATIONS.includes(sl.station) ? sl.station : (prev && prev.data.station) || "" });
+        const saved = await Core.saveLocal(rec);
+        sl.id = saved.id; sl.saved = sig(sl);
+      }
+      await reload();
+      afterSubmit(todo.length === 1 ? `${todo[0].station.startsWith("Team") ? "Rating" : todo[0].station} · ${todo[0].team}` : `Ratings for ${todo.map((sl) => sl.team).join(", ")}`);
+      if (single) {
+        // jump to the next robot that still needs rating
+        const nextIdx = [1, 2, 3, 4, 5].map((k) => (active + k) % slots.length).find((i) => !isSaved(slots[i]));
+        if (nextIdx !== undefined) { active = nextIdx; drawPanel(); window.scrollTo(0, $("#slotTabs").offsetTop - 120); } else drawTabs();
+      }
+      return true;
+    }
+    const nextMatch = () => {
+      S.formDirty = false;
+      if (editRec) { go("#/rate"); return; }
+      const i = S.model.schedule.findIndex((m) => m.data.mk === mk);
+      const next = i >= 0 ? S.model.schedule[i + 1] : null;
+      go(next ? `#/rate?mk=${next.data.mk}&t=${Date.now()}` : `#/rate?t=${Date.now()}`);
+      window.scrollTo(0, 0);
+    };
+
     form.onsubmit = async (e) => {
       e.preventDefault();
-      if (!S.settings.scoutName) { toast("Add your name first"); return; }
-      const t = Number(teamIn.value);
-      if (!t) { toast("Enter a team number"); return; }
-      const prev = editing && editing.team === t ? editing : mine(t);
-      const rec = prev ? Object.assign({}, prev) : { id: Core.newId("rating"), kind: "rating", event: S.settings.event, scout: S.settings.scoutName };
-      rec.team = t; rec.data = readFields(form, g.rating);
-      await save(rec);
-      S.formDirty = false;
-      afterSubmit(`Rating for ${t}`);
-      go("#/rate?t=" + Date.now());
+      readActive();
+      if (!editRec && !slots.some(isPending) && slots.some(isSaved)) { nextMatch(); return; } // "Done with this match"
+      if (await submitSlots(slots, false)) nextMatch();
+    };
+    const del = $("#del");
+    if (del) del.onclick = async () => {
+      if (!confirm("Delete this rating for everyone?")) return;
+      await save(Object.assign({}, editRec, { deleted: true }));
+      S.formDirty = false; toast("Deleted"); go("#/rate");
     };
   }
 
@@ -470,14 +620,14 @@
     const n = Number(p.id), t = S.model.teamMap.get(n), g = S.model.game, main = S.settings.mode === "main";
     if (!t) { view.innerHTML = `<h1>Team ${esc(p.id)}</h1><p>No information yet.</p><a class="btn primary" href="#/pit?team=${esc(p.id)}">Pit scout this team</a>`; return; }
     const kvs = (fields, comb) => `<dl class="kv">${fields.map((f) => `<dt>${esc(f.label)}</dt><dd>${cellOf(comb[f.key])}</dd>`).join("")}</dl>`;
-    const perScout = (reps, fields) => reps.map((r) => `<details><summary>${esc(r.scout || "?")} · ${new Date(r.updatedAt).toLocaleString()}</summary>
+    const perScout = (reps, fields) => reps.map((r) => `<details><summary>${esc(r.scout || "?")}${r.data && r.data.mk ? ` · ${esc(Tba.label(r.data.mk))}` : ""} · ${new Date(r.updatedAt).toLocaleString()}</summary>
       <dl class="kv">${fields.map((f) => `<dt>${esc(f.label)}</dt><dd>${esc([].concat(r.data[f.key] ?? "").join(", "))}</dd>`).join("")}</dl></details>`).join("");
     const s = t.summary;
     view.innerHTML = `
       <h1>${t.number} ${esc(t.name)} ${ours(t.number) ? `<span class="pill">Us</span>` : ""}</h1>
       <div class="actions">
         <a class="btn primary" href="#/pit?team=${n}">Pit scout</a>
-        <a class="btn" href="#/rate?team=${n}">Rate</a>
+        
         <a class="btn" target="_blank" rel="noopener" href="https://www.thebluealliance.com/team/${n}">Blue Alliance ↗</a>
         <a class="btn" target="_blank" rel="noopener" href="https://www.statbotics.io/team/${n}">Statbotics ↗</a>
       </div>

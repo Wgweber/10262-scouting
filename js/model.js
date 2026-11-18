@@ -30,7 +30,8 @@
     const teams = [...numbers].sort((a, b) => a - b).map((n) => {
       const tr = teamRecs.get(n);
       const pitReps = C.latestPerScout(pitBy.get(n) || [], (r) => r.scout || r.device);
-      const ratReps = C.latestPerScout(ratingBy.get(n) || [], (r) => r.scout || r.device);
+      // One rating per scout per match counts (a scout re-saving the same match replaces their earlier one).
+      const ratReps = C.latestPerScout(ratingBy.get(n) || [], (r) => `${r.scout || r.device}|${(r.data && r.data.mk) || ""}`);
       return {
         number: n,
         name: (tr && tr.data.name) || "",
