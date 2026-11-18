@@ -1,4 +1,4 @@
-/* Eruption Scout — draw QR codes and read them with the camera. */
+/* 10262 Scouting — draw QR codes and read them with the camera. */
 (function (root) {
   function svg(text) {
     root.qrcode.stringToBytes = root.qrcode.stringToBytesFuncs["UTF-8"];

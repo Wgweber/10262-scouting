@@ -1,4 +1,4 @@
-/* Eruption Scout — game and form definitions.
+/* 10262 Scouting — game and form definitions.
  *
  * Everything the scouts fill in is defined here, so a new game (2027) only
  * needs changes in this file. Field types:

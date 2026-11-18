@@ -1,4 +1,4 @@
-/* Eruption Scout — combining several scouts' reports into one answer.
+/* 10262 Scouting — combining several scouts' reports into one answer.
  * Pure functions, no browser APIs, so they can be tested on their own. */
 (function (root) {
   const isBlank = (v) => v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);

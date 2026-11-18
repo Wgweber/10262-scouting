@@ -1,6 +1,6 @@
 {
-  "name": "Eruption Scout",
-  "short_name": "Eruption",
+  "name": "10262 Scouting",
+  "short_name": "10262 Scouting",
   "description": "Offline FRC scouting: pit scouting, match scouting, ratings and alliance selection.",
   "start_url": "./index.html#/home",
   "scope": "./",

@@ -1,4 +1,4 @@
-/* Eruption Scout — turns the saved records into the views the app shows
+/* 10262 Scouting — turns the saved records into the views the app shows
  * (the same tabs your spreadsheet had). Pure logic, testable on its own. */
 (function (root) {
   const C = root.ESCombine, F = root.ESFields, T = root.ESTba;

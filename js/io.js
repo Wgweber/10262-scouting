@@ -1,4 +1,4 @@
-/* Eruption Scout — Excel import/export, JSON backups, QR payloads. */
+/* 10262 Scouting — Excel import/export, JSON backups, QR payloads. */
 (function (root) {
   const C = root.ESCombine;
 
@@ -213,12 +213,12 @@
 
   // ---------- JSON backup ----------
   function backupJSON(records, settings) {
-    return JSON.stringify({ app: "Eruption Scout", version: 1, exportedAt: new Date().toISOString(), event: settings.event, records }, null, 1);
+    return JSON.stringify({ app: "10262 Scouting", version: 1, exportedAt: new Date().toISOString(), event: settings.event, records }, null, 1);
   }
   function parseBackup(text) {
     const j = JSON.parse(text);
     const recs = Array.isArray(j) ? j : j.records;
-    if (!Array.isArray(recs)) throw new Error("That file isn't an Eruption Scout backup.");
+    if (!Array.isArray(recs)) throw new Error("That file isn't an 10262 Scouting backup.");
     return recs.filter((r) => r && r.id && r.kind && r.event);
   }
 

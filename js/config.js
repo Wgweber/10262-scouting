@@ -1,4 +1,4 @@
-/* Eruption Scout — team-wide defaults.
+/* 10262 Scouting — team-wide defaults.
  * Fill in cloudUrl and cloudKey once (from Supabase > Project Settings > API)
  * so every device that installs the app is already pointed at your cloud.
  * Scouts then only type their name and the team code.

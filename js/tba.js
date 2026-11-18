@@ -1,4 +1,4 @@
-/* Eruption Scout — The Blue Alliance import (schedule, scores, team list).
+/* 10262 Scouting — The Blue Alliance import (schedule, scores, team list).
  * Needs internet and a TBA "Read API Key". The key stays on this device only. */
 (function (root) {
   const API = "https://www.thebluealliance.com/api/v3";

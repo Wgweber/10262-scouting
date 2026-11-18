@@ -1,4 +1,4 @@
-/* Eruption Scout — on-device storage, outbox and cloud sync.
+/* 10262 Scouting — on-device storage, outbox and cloud sync.
  * Loaded by both the app page and the service worker (no DOM use here). */
 (function (root) {
   const DB_NAME = "eruption-scout";

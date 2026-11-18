@@ -1,4 +1,4 @@
-/* Eruption Scout — screens. */
+/* 10262 Scouting — screens. */
 (function () {
   const Core = window.ESCore, Model = window.ESModel, IO = window.ESIO, Tba = window.ESTba, QR = window.ESQR, Comb = window.ESCombine;
   const $ = (s, el = document) => el.querySelector(s);
@@ -695,11 +695,11 @@
     $("#xlsxBtn").onclick = async () => {
       await needXLSX();
       const all = S.records;
-      download(new Blob([IO.exportWorkbook(S.model, all)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `EruptionScout_${s.event}_${stamp()}.xlsx`);
+      download(new Blob([IO.exportWorkbook(S.model, all)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `10262Scouting_${s.event}_${stamp()}.xlsx`);
     };
     $("#jsonBtn").onclick = async () => {
       const all = await Core.allRecords();
-      download(new Blob([IO.backupJSON(all, s)], { type: "application/json" }), `EruptionScout_backup_${stamp()}.json`);
+      download(new Blob([IO.backupJSON(all, s)], { type: "application/json" }), `10262Scouting_backup_${stamp()}.json`);
     };
     $("#jsonIn").onchange = async (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -766,7 +766,7 @@
       const setup = parseSetup(text);
       if (setup) { $("#scanMsg").textContent = "That's a setup code — scan it from Settings on the scout's phone instead."; return; }
       const c = IO.parseChunk(text);
-      if (!c) { $("#scanMsg").textContent = "That QR code isn't from Eruption Scout."; return; }
+      if (!c) { $("#scanMsg").textContent = "That QR code isn't from 10262 Scouting."; return; }
       if (!batches.has(c.batch)) batches.set(c.batch, { n: c.n, parts: {} });
       const b = batches.get(c.batch);
       b.parts[c.i] = c.part;
@@ -831,7 +831,7 @@
         <div id="offlineState2" class="small" style="margin-top:.5rem"></div>
         <div id="storageState" class="small muted"></div>
       </div>
-      <p class="small muted">Eruption Scout · data stays on this device unless cloud sync is set up. Device ID: <span id="devId"></span></p>`;
+      <p class="small muted">10262 Scouting · data stays on this device unless cloud sync is set up. Device ID: <span id="devId"></span></p>`;
     Core.deviceId().then((d) => ($("#devId").textContent = d));
     offlineCheck().then((t) => { const el = $("#offlineState2"); if (el) el.innerHTML = t; });
     if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then((p) => { const el = $("#storageState"); if (el) el.textContent = p ? "Storage: protected from automatic clean-up ✓" : "Storage: the browser may clear data if the device runs very low on space — install the app to protect it."; });
