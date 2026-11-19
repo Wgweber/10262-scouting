@@ -157,16 +157,23 @@
   async function push(s) {
     const pending = await outboxIds();
     if (!pending.length) return 0;
-    let sent = 0;
-    for (let i = 0; i < pending.length; i += 200) {
-      const slice = pending.slice(i, i + 200);
-      const recs = [];
-      for (const o of slice) { const r = await getRecord(o.id); if (r) recs.push(r); }
-      if (recs.length) {
+    let sent = 0, i = 0;
+    // Batches of up to 200 records or ~1.5 MB (robot photos are ~100 KB each).
+    while (i < pending.length) {
+      const slice = [], rows = [];
+      let bytes = 0;
+      while (i < pending.length && slice.length < 200) {
+        const o = pending[i];
+        const r = await getRecord(o.id);
+        const row = r ? JSON.stringify(toRow(r)) : "";
+        if (slice.length && bytes + row.length > 1500000) break;
+        slice.push(o); if (r) rows.push(row); bytes += row.length; i++;
+      }
+      if (rows.length) {
         const res = await fetch(baseUrl(s) + "?on_conflict=id", {
           method: "POST",
           headers: headers(s, { Prefer: "resolution=merge-duplicates,return=minimal" }),
-          body: JSON.stringify(recs.map(toRow))
+          body: "[" + rows.join(",") + "]"
         });
         if (!res.ok) throw new Error(await explain(res));
       }
@@ -178,32 +185,45 @@
           if (cur && cur.updatedAt <= o.updatedAt) ob.delete(o.id);
         }
       });
-      sent += recs.length;
+      sent += rows.length;
     }
     return sent;
   }
 
-  async function pull(s) {
-    const ckey = "cursor:" + s.event;
+  /** Download everything changed since the last time, for one slice of the data. */
+  async function pullSet(s, name, filter, limit) {
+    const ckey = "cursor:" + name;
     let cursor = (await getMeta(ckey)) || "1970-01-01T00:00:00Z";
     let got = 0, changed = 0;
-    for (let page = 0; page < 50; page++) {
+    for (let page = 0; page < 200; page++) {
       // Step back 30 s so rows committed slightly late are never skipped.
       const since = new Date(new Date(cursor).getTime() - 30000).toISOString();
-      const url = baseUrl(s) + `?select=*&event=eq.${encodeURIComponent(s.event)}&synced_at=gt.${encodeURIComponent(since)}&order=synced_at.asc&limit=1000`;
+      const url = baseUrl(s) + `?select=*&${filter}&synced_at=gt.${encodeURIComponent(since)}&order=synced_at.asc&limit=${limit}`;
       const res = await fetch(url, { headers: headers(s) });
       if (!res.ok) throw new Error(await explain(res));
       const rows = await res.json();
       got += rows.length;
       changed += await mergeRecords(rows.map(fromRow));
+      const before = cursor;
       if (rows.length) {
         const last = rows[rows.length - 1].synced_at;
         if (last && last > cursor) cursor = last;
       }
       await setMeta(ckey, cursor);
-      if (rows.length < 1000 || rows.length && rows[0].synced_at === rows[rows.length - 1].synced_at) break;
+      if (rows.length < limit || cursor === before) break;
     }
     return { got, changed };
+  }
+  /** This event's data plus team-wide data (game forms). Main computers also get robot photos;
+   *  scout phones skip them to save data. */
+  async function pull(s) {
+    const ev = encodeURIComponent(s.event);
+    const r = await pullSet(s, s.event, `event=in.(${ev},_global)&kind=neq.photo`, 1000);
+    if (s.mode === "main") {
+      const p = await pullSet(s, "photos:" + s.event, `event=eq.${ev}&kind=eq.photo`, 15);
+      r.got += p.got; r.changed += p.changed;
+    }
+    return r;
   }
 
   let running = null;

@@ -172,44 +172,57 @@
   function fmt(c) { return c && c.n ? (Array.isArray(c.value) ? c.display : c.display) : ""; }
 
   function exportWorkbook(model, records) {
-    const X = root.XLSX, wb = X.utils.book_new(), g = model.game;
+    const X = root.XLSX, wb = X.utils.book_new(), g = model.game, G = root.ESGame, St = root.ESStats;
     const add = (name, rows, widths) => {
       const ws = X.utils.aoa_to_sheet(rows);
       if (widths) ws["!cols"] = widths.map((w) => ({ wch: w }));
-      ws["!freeze"] = { xSplit: 1, ySplit: 1 };
       X.utils.book_append_sheet(wb, ws, name);
     };
+    const num = (v, d = 1) => (v === null || v === undefined || !isFinite(v) ? "" : Math.round(v * Math.pow(10, d)) / Math.pow(10, d));
+    const ratingF = G.dataFields(g, "rating"), pitF = G.dataFields(g, "pit"), matchF = G.dataFields(g, "match");
+    const mk = (r) => root.ESModel.mkOf(r);
+
+    // Team summary: every metric the app knows, ranked by average points.
+    const ms = model.metrics.filter((m) => !m.retired);
+    add("Team Summary", [["Rank", "Team #", "Team Name", ...ms.map((m) => m.label)]].concat(
+      model.teams.slice().sort((a, b) => (a.rank || 9999) - (b.rank || 9999) || a.number - b.number)
+        .map((t) => [t.rank || "", t.number, t.name, ...ms.map((m) => num(m.get(t), m.digits))])), [6, 8, 24]);
     add("Main", [["Team #", "Team Name", "Playoffs?", "Worlds?", "Award 1", "Award 2", "Award 3", "Blue Alliance Link", "Statbotics Link",
-      ...g.rating.map((f) => f.label), "Scouts"]].concat(model.teams.map((t) => [
+      ...ratingF.map((f) => f.label), "Scouts"]].concat(model.teams.map((t) => [
       t.number, t.name, t.info.playoffs || "", t.info.worlds || "", ...[0, 1, 2].map((i) => (t.info.awards || [])[i] || ""),
       `https://www.thebluealliance.com/team/${t.number}`, `https://www.statbotics.io/team/${t.number}`,
-      ...g.rating.map((f) => fmt(t.rating[f.key])), t.rating._scouts.join(", ")])), [8, 24, 9, 12, 16, 16, 16, 30, 30]);
-    add("Pit Scouting", [["Team #", "Team Name", ...g.pit.map((f) => f.label), "Reports", "Scouts", "Last Updated"]].concat(
-      model.teams.map((t) => [t.number, t.name, ...g.pit.map((f) => fmt(t.pit[f.key])), t.pit._count, t.pit._scouts.join(", "),
+      ...ratingF.map((f) => fmt(t.rating[f.key])), t.rating._scouts.join(", ")])), [8, 24, 9, 12, 16, 16, 16, 30, 30]);
+    add("Pit Scouting", [["Team #", "Team Name", ...pitF.map((f) => f.label), "Reports", "Scouts", "Photos", "Last Updated"]].concat(
+      model.teams.map((t) => [t.number, t.name, ...pitF.map((f) => fmt(t.pit[f.key])), t.pit._count, t.pit._scouts.join(", "), t.photos.length,
         t.pitReports[0] ? new Date(t.pitReports[0].updatedAt).toLocaleString() : ""])), [8, 24]);
     add("Match Data", [["Match", "Red 1", "Red 2", "Red 3", "Blue 1", "Blue 2", "Blue 3", "Red Score", "Blue Score", "Winner", "Match Key"]].concat(
       model.schedule.map((m) => [m.data.label, ...pad3(m.data.red), ...pad3(m.data.blue), m.data.redScore ?? "", m.data.blueScore ?? "", m.data.winner || "", m.data.key || m.data.mk])));
-    add("Match Scouting", [["Match", "Team #", "Alliance", ...g.match.map((f) => f.label), "Scout", "Saved"]].concat(
-      model.match.slice().sort((a, b) => root.ESTba.sortValue(root.ESModel.mkOf(a)) - root.ESTba.sortValue(root.ESModel.mkOf(b)) || a.team - b.team)
-        .map((r) => [root.ESTba.label(root.ESModel.mkOf(r)), r.team, r.data.alliance || "", ...g.match.map((f) => cell(r.data[f.key])), r.scout, new Date(r.updatedAt).toLocaleString()])), [8, 8, 9]);
-    add("Team Summary", [["Rank", "Team #", "Team Name", "Avg Auto", "Avg Teleop", "Avg Endgame", "Avg Defense", "Avg Driver Skill", "Matches Scouted", "Reports", "Problem Matches", "Overall Score"]].concat(
-      model.summary.map((s) => [s.rank, s.team, (model.teamMap.get(s.team) || {}).name || "", s.avgAuto ?? "", s.avgTeleop ?? "", s.avgEndgame ?? "", s.avgDefense ?? "", s.avgDriver ?? "", s.matches, s.reports, s.problems, s.overall])));
+    const phaseName = (f) => (St.PHASE_SHORT[f.phase] || "") + ": " + f.label + (f.retired ? " (retired)" : "");
+    add("Match Scouting", [["Match", "Team #", "Alliance", "Station", ...matchF.map(phaseName), "Auto pts", "Teleop pts", "Endgame pts", "Total pts", "Foul pts given", "Problems", "Scout", "Saved"]].concat(
+      model.match.slice().sort((a, b) => root.ESTba.sortValue(mk(a)) - root.ESTba.sortValue(mk(b)) || a.team - b.team)
+        .map((r) => {
+          const p = G.reportPoints(r.data, g);
+          return [root.ESTba.label(mk(r)), r.team, r.data.alliance || "", r.data.station || "", ...matchF.map((f) => cell(r.data[f.key])),
+            num(p.auto), num(p.teleop), num(p.endgame), num(p.total), num(p.penalty), G.reportProblems(r.data, g).join(", "), r.scout, new Date(r.updatedAt).toLocaleString()];
+        })), [8, 8, 9, 9]);
     const al = (model.alliance && model.alliance.data) || { ranking: [], alliances: [] };
-    const asRows = [["General Rankings", "", "", "", "Predictions"], [], ["Team Name", "Team #", "Notes", "", "Alliance", "Captain", "Pick 1", "Pick 2"]];
-    const len = Math.max(al.ranking.length, 8);
-    for (let i = 0; i < len; i++) {
-      const r = al.ranking[i], a = (al.alliances || [])[i];
-      asRows.push([r ? (model.teamMap.get(r.team) || {}).name || "" : "", r ? r.team : "", r ? r.notes || "" : "", "",
-        i < 8 ? i + 1 : "", ...(i < 8 ? [0, 1, 2].map((k) => (a && a[k]) || "") : [])]);
-    }
-    add("Alliance Selection", asRows, [24, 8, 40, 2, 9, 9, 9, 9]);
+    const tierName = { 1: "First pick", 2: "Second pick", 3: "Maybe", dnp: "Do not pick" };
+    add("Picklist", [["Order", "Team #", "Team Name", "Group", "Notes", "Picked?"]].concat((al.ranking || []).map((r, i) => [i + 1, r.team,
+      (model.teamMap.get(r.team) || {}).name || "", tierName[r.tier] || "", r.notes || "", (al.alliances || []).flat().includes(r.team) ? "Picked" : (al.declined || []).includes(r.team) ? "Declined" : ""])), [6, 8, 24, 12, 40]);
+    const asRows = [["Alliance", "Captain", "Pick 1", "Pick 2", "Pick 3"]];
+    for (let i = 0; i < 8; i++) { const a = (al.alliances || [])[i] || []; asRows.push([i + 1, a[0] || "", a[1] || "", a[2] || "", a[3] || ""]); }
+    add("Alliance Selection", asRows, [9, 9, 9, 9, 9]);
     add("All Reports", [["Kind", "Team #", "Match", "Scout", "Saved", "Data (JSON)", "Record ID"]].concat(
       records.filter((r) => r.event === model.event && !r.deleted && ["pit", "match", "rating"].includes(r.kind))
-        .map((r) => [r.kind, r.team ?? "", r.kind === "match" ? root.ESTba.label(root.ESModel.mkOf(r)) : "", r.scout, new Date(r.updatedAt).toLocaleString(), JSON.stringify(r.data), r.id])));
+        .map((r) => [r.kind, r.team ?? "", r.kind === "match" || (r.data && r.data.mk) ? root.ESTba.label(mk(r)) : "", r.scout, new Date(r.updatedAt).toLocaleString(), JSON.stringify(r.data), r.id])));
+    const gRows = [["Form", "Phase", "Label", "Type", "Points", "Fouls to other alliance", "Options (points)", "Retired", "Key"]];
+    for (const kind of ["match", "pit", "rating"]) for (const f of g[kind]) gRows.push([kind, f.phase || "", f.label, f.type, f.points ?? "", f.penalty ?? "",
+      (f.options || []).map((o) => (f.optionPoints && f.optionPoints[o] ? `${o} (${f.optionPoints[o]})` : o)).join(", "), f.retired ? "yes" : "", f.key]);
+    add("Game Form", [[`${g.name} — ${g.source === "published" ? "version " + g.version : "built-in"}`], []].concat(gRows), [8, 9, 34, 10, 7, 9, 40, 8, 14]);
     return X.write(wb, { bookType: "xlsx", type: "array" });
   }
   const pad3 = (a) => [0, 1, 2].map((i) => (a && a[i]) || "");
-  const cell = (v) => (Array.isArray(v) ? v.join(", ") : v ?? "");
+  const cell = (v) => (Array.isArray(v) ? v.join(", ") : v === true ? "Yes" : v === false ? "No" : v ?? "");
 
   // ---------- JSON backup ----------
   function backupJSON(records, settings) {

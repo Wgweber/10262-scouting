@@ -54,5 +54,47 @@
     return { matches: md, teams: teams.map((t) => ({ number: t.team_number, name: t.nickname || t.name || "" })) };
   }
 
-  root.ESTba = { fetchEvent, label, sortValue };
+  /** Event standings (rank, record, avg ranking points) and OPR / DPR / CCWM, keyed by team number.
+   *  Either part can be missing early in an event; whatever is available is returned. */
+  async function fetchEventStats(event, key) {
+    if (!key) throw new Error("Add your Blue Alliance API key in Settings first.");
+    const [rk, op] = await Promise.all([get(`/event/${event}/rankings`, key).catch(() => null), get(`/event/${event}/oprs`, key).catch(() => null)]);
+    const teams = {};
+    const t = (n) => (teams[n] = teams[n] || {});
+    if (rk && Array.isArray(rk.rankings)) {
+      const info = (rk.sort_order_info || []).map((x) => (x && x.name) || "");
+      for (const r of rk.rankings) {
+        const o = t(num(r.team_key));
+        o.rank = r.rank;
+        if (r.record) { o.wins = r.record.wins; o.losses = r.record.losses; o.ties = r.record.ties; }
+        o.played = r.matches_played;
+        if (Array.isArray(r.sort_orders) && r.sort_orders.length) { o.rpAvg = r.sort_orders[0]; o.rankingScoreName = info[0] || "Ranking score"; }
+      }
+    }
+    if (op && op.oprs) for (const [k, v] of Object.entries(op.oprs)) {
+      const o = t(num(k)); o.opr = v;
+      if (op.dprs) o.dpr = op.dprs[k];
+      if (op.ccwms) o.ccwm = op.ccwms[k];
+    }
+    return { teams, hasRankings: !!(rk && rk.rankings && rk.rankings.length), hasOprs: !!(op && op.oprs && Object.keys(op.oprs).length) };
+  }
+
+  /** Statbotics EPA (expected points added) for every team at an event. No key needed.
+   *  Read defensively: only the overall EPA number is used. */
+  async function fetchEpa(event) {
+    const res = await fetch(`https://api.statbotics.io/v3/team_events?event=${encodeURIComponent(event)}&limit=200`);
+    if (!res.ok) throw new Error(`Statbotics error ${res.status}`);
+    const rows = await res.json();
+    const teams = {};
+    for (const r of Array.isArray(rows) ? rows : []) {
+      const e = r && r.epa;
+      const v = e && (e.total_points && typeof e.total_points.mean === "number" ? e.total_points.mean
+        : e.breakdown && typeof e.breakdown.total_points === "number" ? e.breakdown.total_points
+        : typeof e.mean === "number" ? e.mean : typeof e.current === "number" ? e.current : null);
+      if (r && r.team != null && v != null) teams[Number(r.team)] = Math.round(v * 10) / 10;
+    }
+    return { teams, count: Object.keys(teams).length };
+  }
+
+  root.ESTba = { fetchEvent, fetchEventStats, fetchEpa, label, sortValue };
 })(typeof self !== "undefined" ? self : globalThis);

@@ -36,7 +36,13 @@
     const n = entries.length;
     if (!n) return { n: 0, value: null, display: "" };
     const t = field.type;
-    if (t === "number" || t === "rating") {
+    if (t === "toggle") {
+      const yes = entries.filter((e) => e.v === true || e.v === 1 || e.v === "true" || e.v === "Yes").length;
+      const rate = yes / n;
+      const display = n === 1 ? (yes ? "Yes" : "No") : yes === n ? `Yes (${n}/${n})` : yes === 0 ? `No (0/${n})` : `Yes ${yes}/${n}`;
+      return { n, value: rate, display, yes, disagree: yes > 0 && yes < n };
+    }
+    if (t === "number" || t === "rating" || t === "counter") {
       const nums = entries.map((e) => parseLooseNumber(e.v)).filter((x) => x !== null);
       if (!nums.length) return { n: 0, value: null, display: "" };
       const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
@@ -69,6 +75,7 @@
   function combineReports(fields, reports) {
     const out = {};
     for (const f of fields) {
+      if (f.type === "header") continue;
       const entries = [];
       for (const r of reports) {
         const v = r.data ? r.data[f.key] : undefined;
